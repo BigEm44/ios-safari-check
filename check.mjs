@@ -43,8 +43,36 @@ const find = async (selector) => {
   const element = await call("POST", s("/element"), { using: "css selector", value: selector });
   return Object.values(element)[0];
 };
-const click = async (selector) => call("POST", s(`/element/${await find(selector)}/click`), {});
-const type = async (selector, text) => call("POST", s(`/element/${await find(selector)}/value`), { text });
+// Dotknięcie palcem (W3C Actions, wskaźnik „touch”) — polecenie „element/click” safaridriver na iOS nie wysyła stronie
+// zdarzeń dotyku i fokusu (przebieg 1: wyspa formularza nie ruszyła, okno powiększenia się nie otworzyło).
+const tap = async (selector) => {
+  const element = await find(selector);
+  await call("POST", s(`/element/${element}/screenshot`)).catch(() => {}); // przewija element do widoku
+  await call("POST", s("/actions"), {
+    actions: [
+      {
+        type: "pointer",
+        id: "finger",
+        parameters: { pointerType: "touch" },
+        actions: [
+          { type: "pointerMove", duration: 0, origin: { "element-6066-11e4-a52e-4f735466cecf": element }, x: 0, y: 0 },
+          { type: "pointerDown", button: 0 },
+          { type: "pause", duration: 80 },
+          { type: "pointerUp", button: 0 },
+        ],
+      },
+    ],
+  });
+  await call("DELETE", s("/actions")).catch(() => {});
+};
+const click = tap;
+const type = async (selector, text) => {
+  await tap(selector);
+  await sleep(400);
+  const keys = [...text].flatMap((value) => [{ type: "keyDown", value }, { type: "keyUp", value }]);
+  await call("POST", s("/actions"), { actions: [{ type: "key", id: "keyboard", actions: keys }] });
+  await call("DELETE", s("/actions")).catch(() => {});
+};
 const scrollTo = async (selector, offset = 70) => {
   await run(
     `const el = document.querySelector(arguments[0]); if (el) window.scrollTo(0, el.getBoundingClientRect().top + scrollY - arguments[1]);`,
@@ -138,7 +166,11 @@ try {
       "Wiadomość testowa: Safari na iOS (symulator iPhone'a, GitHub Actions), sesja 10c. Można usunąć.",
     );
     await sleep(12000); // blokada czasowa formularza i Turnstile w tle
-    return run(`return { turnstileFrames: document.querySelectorAll('iframe[src*="challenges.cloudflare.com"]').length }`);
+    return run(`return {
+      turnstileFrames: document.querySelectorAll('iframe[src*="challenges.cloudflare.com"]').length,
+      values: [...document.querySelectorAll('#kontakt input, #kontakt textarea')].map((field) => field.name + '=' + field.value.length),
+      submitDisabled: document.querySelector('#kontakt button[type="submit"]')?.disabled ?? null,
+    }`);
   });
   await step("contact-sent", async () => {
     await click('#kontakt button[type="submit"]');
