@@ -1,0 +1,56 @@
+# Safari z iOS na symulatorze iPhone'a (sesja 10c P18). Uruchamiane ręcznie: gh workflow run safari.yml -f url=<adres>
+name: Safari iOS
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Adres strony
+        required: true
+        default: https://www.domy-lipowa-demo.pl
+permissions:
+  contents: read
+jobs:
+  safari:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Symulator iPhone'a
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes
+          UDID=$(xcrun simctl list devices available -j | node -e '
+            const data = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const ios = Object.entries(data.devices).filter(([runtime]) => runtime.includes("iOS")).sort().reverse();
+            for (const [, devices] of ios) {
+              const phone = devices.find((device) => /^iPhone \d+$/.test(device.name)) ?? devices.find((device) => device.name.startsWith("iPhone"));
+              if (phone) { console.log(phone.udid); break; }
+            }')
+          echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl list devices booted
+      - name: safaridriver
+        run: |
+          sudo safaridriver --enable
+          safaridriver -p 4444 &
+          sleep 3
+      - name: Sprawdzenie strony (WebDriver)
+        id: webdriver
+        continue-on-error: true
+        run: node check.mjs "${{ inputs.url }}" results
+      - name: Zapas — same zrzuty adresów, gdy WebDriver nie ruszył
+        if: steps.webdriver.outcome == 'failure'
+        run: |
+          mkdir -p results/fallback
+          for target in "/" "/#lokale" "/#budowa" "/#kontakt" "/oferta/dom-1a"; do
+            name=$(echo "$target" | tr '/#' '__')
+            xcrun simctl openurl "$SIMULATOR_UDID" "${{ inputs.url }}$target"
+            sleep 8
+            xcrun simctl io "$SIMULATOR_UDID" screenshot "results/fallback/$name.png"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: safari-results
+          path: results
